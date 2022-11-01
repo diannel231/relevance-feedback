@@ -4,7 +4,9 @@ import collections
 import time
 import lucene
 import time
+import json
 import numpy as np
+from os.path import exists
 #from java.io import File
 from org.apache.lucene.document import Document, Field, FieldType, StringField, TextField
 from org.apache.lucene.util import Version
@@ -26,9 +28,10 @@ from org.apache.lucene.queryparser.classic import *
 class index:
     corpus_path = "./time/time.all"
     corpus_index_folder = "./index7"
-    
+    dictionary = []
+    stop_list = []
+    docVectors = {}
     def build_doc_dict(self):
-
         file = open(index.corpus_path) # open in read mode
         lines = file.readlines()
         self.doc_files = {}
@@ -38,18 +41,39 @@ class index:
             if line.startswith("*TEXT"):
                 #beginning of next text file. save what we have so far as a document
                 if doctext != "":
-                    self.doc_files[current_file_id] = doctext   
+                    self.doc_files[current_file_id] = doctext
+                    docWords = self.filter_words_with_stoplist(doctext)
+                    self.buildDictionary(docWords)
                     #print(current_file_id+":::"+str(len(doctext)))
                 current_file_id = list(filter(None, line.split()))[1]
                 doctext = ""
             else:
                 doctext += line
-        file.close() # close the file pointer
-    stop_list = []
+        #build docVector dictionary
+        file_exists = exists("./docVectors.json")
+        if file_exists:
+            #deserialize vectors
+            f = open("./docVectors.json", "r")
+            jsonText = f.read()
+            self.docVectors = json.loads(jsonText)
+            self.docVectors = {int(k):v for k,v in self.docVectors.items()}
+            print(f"read {len(self.docVectors)} doc vectors")
+        else:
+            for d in self.doc_files:
+                #todo: this is called twice, once above. optimize it later!
+                docWords = self.filter_words_with_stoplist(self.doc_files[d])
+                print(f"Building document vector for docId {d}")
+                self.docVectors[d] = self.buildDocumentVector(docWords)
+            jsText = json.dumps(self.docVectors)
+            f = open("./docVectors.json","w")
+            f.write(jsText)
+            f.close()
+            file.close() # close the file pointer
+    
     
     
     def filter_words_with_stoplist(self, text):
-        with open(self.path + "./stop-list.txt") as file:
+        with open("./stop-list.txt") as file:
             self.stop_list = file.read().split('\n')
         text = text.replace('\n',' ')
         words = re.sub('[^a-zA-Z \n]', '', text).lower().split()
@@ -63,26 +87,35 @@ class index:
         query_array_cleaned = self.filter_words_with_stoplist(query_text)
         return query_array_cleaned#self.join_txt_array_to_string(query_array_cleaned)
     
-    def buildDocumentVector(self, rawDoc, query_terms):
-        words = self.filter_words_with_stoplist(rawDoc)
-        vector = []
-        for term in query_terms:
-            i = 0
-            for word in words:
-                if word == term:
-                    i += 1
-            vector.append(i)
-        return vector
+    def getFreqOfTermInWords(self, term, words):
+        i = 0
+        for word in words:
+            if term == word:
+                i+=1
+        return i
+    
+    def buildDocumentVector(self, docWords):
+        #print("docWords", docWords)
+        vector = {}
+        for dictWord in self.dictionary:
+            vector[dictWord] = self.getFreqOfTermInWords(dictWord, docWords)
+        return list(vector.values())
             
+    def buildDictionary(self, docWords):
+        for word in docWords:
+            if word not in self.dictionary:
+                self.dictionary.append(word)
+    
     def __init__(self):
         #lucene.initVM()
-        #print("Building Documents Dictionary")        
-        #self.build_doc_dict()
+        print("Building Documents List")        
+        self.build_doc_dict()
         #print("Building Index")
         #self.buildIndex()
-        self.query(["asd"], 5)
         
-    
+		#function to read documents from collection, tokenize and build the index with tokens
+		# implement additional functionality to support relevance feedback
+		#use unique document integer IDs    
     def buildIndex(self):
         directory = FSDirectory.open(Paths.get(index.corpus_index_folder))
         analyzer = StandardAnalyzer()
@@ -102,38 +135,48 @@ class index:
             i+=1
         print(f"{i} files indexed")
         self.writer.close()
-		#function to read documents from collection, tokenize and build the index with tokens
-		# implement additional functionality to support relevance feedback
-		#use unique document integer IDs
 
-    def rocchio(self, query_text, pos_feedback, neg_feedback, alpha, beta, gamma):
-        docVectors = self.query(query_text, 10)
-        q1Vector = np.array(docVectors["q1"])
+        #function to implement rocchio algorithm
+        #s_feedback - documents deemed to be relevant by the user
+        #g_feedback - documents deemed to be non-relevant by the user
+        #turn the new query  terms and their weights
+    def rocchio(self, query_text, k, alpha, beta, gamma):
+        docVectors = self.query(query_text, k)
+        pos_feedback = []
+        neg_feedback = []
+        for doc in docVectors:
+            if doc == "q1":
+                continue
+            #get feedback from user
+            feedback_input = input(f"Enter feedback for the search result with doc id {doc} and score: {docVectors[doc][0]}. Y for positive, N for negative: ")
+            if feedback_input.lower() == "y":
+                pos_feedback.append(doc)
+            else:
+                neg_feedback.append(doc)
+        q1Vector = np.array(docVectors["q1"][1])
         num_of_pos_feedback = len(pos_feedback)
         num_of_neg_feedback = len(neg_feedback)
         sum_of_pos_docs = []
         sum_of_neg_docs = []
-        for i in len(q1Vector):
+        for i in range(len(q1Vector)):
             sum_of_pos_docs.append(0)
             sum_of_neg_docs.append(0)
         sum_of_pos_docs = np.array(sum_of_pos_docs)
         sum_of_neg_docs = np.array(sum_of_neg_docs)
         for doc in pos_feedback:
-            docNp = np.array(docVectors[doc])
+            docNp = np.array(docVectors[doc][1])
             sum_of_pos_docs = sum_of_pos_docs + docNp
         for doc in neg_feedback:
-            docNp = np.array(docVectors[doc])
+            docNp = np.array(docVectors[doc][1])
             sum_of_neg_docs = sum_of_neg_docs + docNp
+        print("num_of_pos_feedback",num_of_pos_feedback)
+        print("num_of_neg_feedback",num_of_neg_feedback)
         queryExp = (alpha * q1Vector) + \
         ((beta / num_of_pos_feedback) * sum_of_pos_docs) - \
         ((gamma / num_of_neg_feedback) * sum_of_neg_docs)
-        print("Expanded query vector", queryExp)
         return queryExp
         
-    	#function to implement rocchio algorithm
-    	#pos_feedback - documents deemed to be relevant by the user
-    	#neg_feedback - documents deemed to be non-relevant by the user
-    	#Return the new query  terms and their weights
+    	
 	
     def query(self, query_text, k):
         query_terms = self.filter_query_text_return_text(query_text)
@@ -147,45 +190,38 @@ class index:
         results = searcher.search(query, 50)
         scoreDocs = results.scoreDocs
         idxReader = searcher.getIndexReader()
-        qvector = []
-        for qterm in query_terms:
-            qf = idxReader.totalTermFreq(Term("text",qterm))
-            qvector.append(qf)
-        docVectors = {"q1":qvector}
-        #print("DFFF", df)
+        qvector = self.buildDocumentVector(query_terms)
+        result_vector = {}
+        result_vector["q1"] = (1,qvector)
+        #print("QVECTOR!", qvector, "query_terms", query_terms)
+        # for qterm in query_terms:
+        #     qf = idxReader.totalTermFreq(Term("text",qterm))
+        #     qvector.append(qf)
         for result in scoreDocs:
-            print("RESULT!", result)
-            rawDoc = searcher.doc(result.doc)
-            docVector = self.buildDocumentVector(rawDoc, query_terms)
-            docVectors[result.doc] = docVector
+            luc_doc = searcher.doc(result.doc)
+            docId = int(luc_doc.get("id"))
+            if docId in list(self.docVectors.keys()):
+                result_vector[docId] = (result.score,self.docVectors[docId])
+            else:
+                print("docId that not in docVectors", docId)
+            #rawDoc = searcher.doc(result.doc)
             #terms = idxReader.getTermVector(result.doc, "text")
             #termEnum = terms.iterator()
-            # print("dir termENUM", dir(termEnum))
-            # print("dir TERMS", dir(terms))
-            # print("term", termEnum.term())
-            # print("terms members", dir(terms))
-            # print("freq",termEnum[1].docFreq(), termEnum[1].totalTermFreq())
-            # bref = BytesRef("nassau")
-            # bytesRef = termEnum.seekExact(bref)
-            # print("bytesre", bytesRef)
-            # #while bytesRef != None:
-            # if termEnum.seekExact(bref):                    
-            #     term = bref.utf8ToString(); 
-            #     print("TERM!!", term)
-            #     bytesRef = termEnum.next()
-                #idf = tfidfSIM.idf( termEnum.docFreq(), reader.numDocs() );
-                    #docFrequencies.put(term, idf);
-            #print("STATS!!!", terms.getStats())
-            #print("TERM VECTORS!!",terms)
-        #print(scoreDocs)
-        return docVectors
+            #bytesRef = termEnum.next() --> No Next() !! ERROR !
+        return result_vector
 	
     def print_dict(self):
-        print("hlle")
+        print("hello")
     #function to print the terms and posting list in the index
 
     def print_doc_list(self):
-        print("hlle")
+        print("hello")
 	# function to print the documents and their document id
     
 c = index()
+#docVectors = c.query("nassau", 10)
+alpha = 1
+beta = 0.75
+gamma = 0.15
+expanded_query = c.rocchio("nassau", 10, alpha, beta, gamma)
+print("EXPANDED QUERY", expanded_query)
