@@ -36,25 +36,6 @@ Generates the query and weight values for the new expanded queries
 Calculates mean average percision of the results by caculating when relevant results occur in the query and taking the average value
 
 ### filter_words_with_stoplist()
-Calculates the cosine of two documents for later use in the inexact retrieval methods
+Removes common words to improve results by eliminating generic values
 
-### filter_query_text_return_text()
-returns the list of words as a vector
 
-### __init__()
-Returns the Id dictionary
-
-### rocchio_queryText()
-gets the file name from the document Id dictionary
-
-### parseTimeQueryFile()
-Takes in a list of tuples as a query and returns a list of the most relevant tuples in the list for inexact search methods
-
-### parseTimeRel()
-Takes in a list of words in a document as a query and returns a list with information on how frequent each term in the list is compared to every other term as a percentage
-
-### print_dict()
-Returns the Id dictionary
-
-### print_doc_list()
-returns the text of a document by inputting a file name
